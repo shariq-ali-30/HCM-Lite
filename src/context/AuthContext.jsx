@@ -7,11 +7,14 @@ export const AuthContext = createContext();
 
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true)
 
   const getUser = async (uid) => {
-    const { user } = await getDoc(doc(db, "users", uid));
+    setLoading(true)
+    const docSnap = await getDoc(doc(db, "users", uid));
 
-    setUser(user);
+    setUser(docSnap.data());
+    setLoading(false)
   };
 
   useEffect(() => {
@@ -26,10 +29,10 @@ const AuthProvider = ({ children }) => {
     return () => {
       unsubAuth();
     };
-  });
+  }, []);
 
   return (
-    <AuthContext.Provider value={{ user, setUser }}>
+    <AuthContext.Provider value={{ user, setUser, loading, setLoading }}>
       {children}
     </AuthContext.Provider>
   );
