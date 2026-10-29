@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import {
   Mail,
   LockKeyhole,
@@ -8,22 +8,37 @@ import {
   Building2,
   UserRound,
   CircleAlert,
+  LoaderCircle,
+  RefreshCw,
 } from "lucide-react";
 import { db } from "../firebase/firebase.js";
-import { doc, getDoc } from "firebase/firestore";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { doc, getDoc, setDoc } from "firebase/firestore";
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+} from "firebase/auth";
 import { auth } from "../firebase/firebase.js";
+import { Navigate, useNavigate } from "react-router-dom";
+import { AuthContext } from "../context/AuthContext.jsx";
 
 export default function Login() {
+  const { user } = useContext(AuthContext);
+
+  console.log(user)
+
   const [companyName, setCompanyName] = useState("");
   const [adminName, setAdminName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [setupNeeded, setSetupNeeded] = useState(null);
-  const [error, setError] = useState("b");
+  const [companyCheckError, setCompanyCheckError] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const errorTimer = useRef(null);
+
+  const navigate = useNavigate();
 
   const showError = (message) => {
     setError(message);
@@ -37,14 +52,6 @@ export default function Login() {
       errorTimer.current = null;
     }, 3000);
   };
-
-  useEffect(() => {
-    return () => {
-      if (errorTimer.current) {
-        clearTimeout(errorTimer.current);
-      }
-    };
-  }, []);
 
   const handleSetup = async (e) => {
     e.preventDefault();
@@ -69,48 +76,147 @@ export default function Login() {
       return;
     }
 
-    const handleSetup = async (e) => {
-      e.preventDefault();
+    try {
+      setLoading(true);
+      const { user } = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password,
+      );
 
-      try {
-        const userCredential = await createUserWithEmailAndPassword(
-          auth,
-          email,
-          password,
-        );
+      await setDoc(doc(db, "users", user.uid), {
+        name: adminName,
+        email: email.trim(),
+        role: "admin",
+      });
 
-        const user = userCredential.user;
+      await setDoc(doc(db, "company", "settings"), {
+        companyName: companyName,
+        startTime: "09:00",
+        graceMinutes: 15,
+        leaveQuota: 14,
+      });
 
-        console.log("User created:", user.uid);
-        console.log("Email:", user.email);
-      } catch (error) {
-        console.error("Signup error:", error.code);
-
-        if (error.code === "auth/email-already-in-use") {
-          console.log("Yeh email pehle se registered hai.");
-        } else if (error.code === "auth/weak-password") {
-          console.log("Password kam az kam 6 characters ka hona chahiye.");
-        } else {
-          console.log("Account create nahi ho saka.");
-        }
+      navigate("/admin");
+    } catch (error) {
+      if (error.code === "auth/email-already-in-use") {
+        showError("This email is already registered.");
+      } else if (error.code === "auth/invalid-email") {
+        showError("Please enter a valid email address.");
+      } else if (error.code === "auth/weak-password") {
+        showError("Password must be at least 6 characters long.");
+      } else if (error.code === "auth/operation-not-allowed") {
+        showError("Email/password signup is not enabled.");
+      } else if (error.code === "auth/network-request-failed") {
+        showError("Network error. Please try again.");
+      } else {
+        showError("Failed to create account. Please try again.");
       }
-    };
+    } finally {
+      setLoading(false);
+    }
   };
 
-  async function checkcompany() {
+  const handleLogin = async (e) => {
+    e.preventDefault();
+
+    if (!email.trim()) {
+      document.getElementById("email")?.focus();
+      return;
+    }
+
+    if (!password.trim()) {
+      document.getElementById("password")?.focus();
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const { user } = await signInWithEmailAndPassword(auth, email, password);
+
+      const docSnap = await getDoc(doc(db, "users", user.uid));
+
+      if (docSnap.exists()) {
+        if (docSnap.data().role === "admin") {
+          navigate("/admin");
+        }
+        if (docSnap.data().role === "employee") {
+          navigate("/employee");
+        }
+      }
+    } catch (error) {
+      if (error.code === "auth/invalid-credential") {
+        showError("Incorrect email or password.");
+      } else if (error.code === "auth/invalid-email") {
+        showError("Please enter a valid email address.");
+      } else if (error.code === "auth/network-request-failed") {
+        showError("Network error. Please try again.");
+      } else {
+        showError("Failed to sign in. Please try again.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const checkcompany = async () => {
     try {
       const docRef = doc(db, "company", "settings");
       const docSnap = await getDoc(docRef);
 
       setSetupNeeded(!docSnap.exists());
     } catch (error) {
-      console.error("Error fetching document:", error);
+      setCompanyCheckError(true);
     }
-  }
+  };
 
   useEffect(() => {
     checkcompany();
   }, []);
+
+  if (user) {
+    if (user.role === "admin") {
+      return <Navigate to={"admin"} />;
+    }
+    if (user.role === "employee") {
+      return <Navigate to={"employee"} />;
+    }
+  }
+
+  // Company check error UI
+  if (setupNeeded === null && companyCheckError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#F3F6F9] px-4 py-8">
+        <div className="w-full max-w-[400px] rounded-2xl border border-[#E0E7EE] bg-white px-6 py-10 text-center shadow-sm sm:px-8">
+          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50">
+            <CircleAlert size={30} className="text-red-500" />
+          </div>
+
+          <h1 className="text-xl font-bold tracking-tight text-[#17324D]">
+            Connection failed
+          </h1>
+
+          <p className="mt-3 text-sm leading-6 text-[#687A8B]">
+            We couldn't load your company settings. Please check your internet
+            connection and try again.
+          </p>
+
+          <button
+            type="button"
+            onClick={checkcompany}
+            className="mt-7 flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-[#1F6B68] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#185653] active:bg-[#124441] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1F6B68] focus-visible:ring-offset-2"
+          >
+            <RefreshCw size={17} />
+            Try again
+          </button>
+
+          <p className="mt-4 text-xs text-[#99A8B4]">
+            Your company data hasn't been changed.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Full-screen loading
   if (setupNeeded === null) {
@@ -125,15 +231,16 @@ export default function Login() {
     );
   }
 
-  // Consistent styling for all input fields
   const inputWrapper =
     "relative h-12 w-full rounded-lg border-[1.5px] border-[#D8E1E8] bg-white transition-colors focus-within:border-[#1F6B68]";
 
-  const inputStyle =
-    "h-full w-full rounded-lg bg-transparent py-3 pl-11 pr-3.5 text-sm text-[#17324D] outline-none placeholder:text-[#99A8B4]";
+  const inputStyle = `h-full w-full rounded-lg bg-transparent py-3 pl-11 pr-3.5 text-sm text-[#17324D] outline-none placeholder:text-[#99A8B4] transition-all ${
+    loading ? "cursor-not-allowed bg-gray-100 opacity-60" : "bg-transparent"
+  }`;
 
-  const iconStyle =
-    "pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#8295A3]";
+  const iconStyle = `pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors ${
+    loading ? "text-gray-400 opacity-50" : "text-[#8295A3]"
+  }`;
 
   const labelStyle = "mb-2 block text-sm font-medium text-[#31485B]";
 
@@ -150,7 +257,7 @@ export default function Login() {
           <p className="mt-2 text-sm leading-5 text-[#687A8B]">
             {setupNeeded
               ? "Create your company and admin account."
-              : "Sign in to access your HCM workspace."}
+              : "Sign in to continue to your account."}
           </p>
         </div>
 
@@ -169,6 +276,7 @@ export default function Login() {
                 <Building2 size={18} className={iconStyle} />
 
                 <input
+                  disabled={loading}
                   id="companyName"
                   name="companyName"
                   type="text"
@@ -176,6 +284,7 @@ export default function Login() {
                   value={companyName}
                   onChange={(e) => setCompanyName(e.target.value)}
                   className={inputStyle}
+                  autoComplete="off"
                 />
               </div>
             </div>
@@ -192,6 +301,7 @@ export default function Login() {
                 <UserRound size={18} className={iconStyle} />
 
                 <input
+                  disabled={loading}
                   id="adminName"
                   name="adminName"
                   type="text"
@@ -214,6 +324,7 @@ export default function Login() {
               <Mail size={18} className={iconStyle} />
 
               <input
+                disabled={loading}
                 id="email"
                 name="email"
                 type="email"
@@ -236,6 +347,7 @@ export default function Login() {
               <LockKeyhole size={18} className={iconStyle} />
 
               <input
+                disabled={loading}
                 id="password"
                 name="password"
                 type={showPassword ? "text" : "password"}
@@ -245,7 +357,7 @@ export default function Login() {
                 }
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="h-full w-full rounded-lg bg-transparent py-3 pl-11 pr-11 text-sm text-[#17324D] outline-none placeholder:text-[#99A8B4]"
+                className={inputStyle}
               />
 
               <button
@@ -273,11 +385,20 @@ export default function Login() {
 
           {/* Submit Button */}
           <button
+            disabled={loading}
             type="submit"
-            className="flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-[#1F6B68] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#185653] active:bg-[#124441]"
+            className="flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-[#1F6B68] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#185653] active:bg-[#124441] disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {setupNeeded ? "Create company" : "Sign in"}
-            <ArrowRight size={17} />
+            {loading ? (
+              <>
+                <LoaderCircle size={17} className="animate-spin" />
+              </>
+            ) : (
+              <>
+                {setupNeeded ? "Create company" : "Sign in"}
+                <ArrowRight size={17} />
+              </>
+            )}
           </button>
         </form>
       </div>
